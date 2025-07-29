@@ -52,7 +52,7 @@ static const GPIOKeyMap keymap[]={
 	// {39, &key_right},
 	
 	// {32, &key_use},				//cross
-	// {33, &key_fire},			//circle
+	{0, &key_fire},			//circle
 	{0, &key_menu_enter},
 	{36, NULL},
 };
@@ -101,18 +101,20 @@ void gpioTask(void *arg) {
 	int level;
 	event_t ev;
     for(;;) {
-        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-			for (int i=0; keymap[i].key!=NULL; i++)
-				if(keymap[i].gpio == io_num)
-				{
+		lprintf(LO_INFO, "will try to dequeue");
+        if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+			for (int i=0; keymap[i].key!=NULL; i++) {
+				if(keymap[i].gpio == io_num) {
 					level = gpio_get_level(io_num);
 					lprintf(LO_INFO, "GPIO[%d] intr, val: %d\n", io_num, level);
 					ev.type=level ? ev_keyup : ev_keydown;
 					ev.data1=*keymap[i].key;
 					lprintf(LO_INFO, "Posting button event...\n");
+					lprintf(LO_INFO, "Addres: %p\n", keymap[i].key);
 					D_PostEvent(&ev);
 					lprintf(LO_INFO, "Button event posted successfully\n");
 				}
+			}
         }
     }
 }
@@ -147,7 +149,7 @@ void jsInit()
     //create a queue to handle gpio event from isr
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     //start gpio task
-	xTaskCreatePinnedToCore(&gpioTask, "GPIO", 1500, NULL, 7, NULL, 0);
+	xTaskCreatePinnedToCore(&gpioTask, "GPIO", 4096, NULL, 7, NULL, 0);
 
     //install gpio isr service
     gpio_install_isr_service(ESP_INTR_FLAG_SHARED);
