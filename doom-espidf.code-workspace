@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "C:\\Users\\vinic\\esp\\esp-idf"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"g_game.h": "c"
+		}
+	}
+}
