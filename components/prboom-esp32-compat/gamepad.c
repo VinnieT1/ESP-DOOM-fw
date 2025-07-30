@@ -32,6 +32,14 @@
 
 //The gamepad uses keyboard emulation, but for compilation, these variables need to be placed
 //somewhere. This is as good a place as any.
+#define JOYSTICK_VERTICAL 34
+#define JOYSTICK_HORIZONTAL 35
+#define JOYSTICK_BUTTON 39
+
+#define THRESHOLD 1500
+#define JOYSTICK_CENTER 2048
+#define TOLERANCE 200
+
 int usejoystick=0;
 int joyleft, joyright, joyup, joydown;
 
@@ -101,7 +109,7 @@ void gpioTask(void *arg) {
 	int level;
 	event_t ev;
     for(;;) {
-		lprintf(LO_INFO, "will try to dequeue");
+		lprintf(LO_INFO, "Waiting for GPIO event...\n");
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
 			for (int i=0; keymap[i].key!=NULL; i++) {
 				if(keymap[i].gpio == io_num) {
@@ -119,6 +127,121 @@ void gpioTask(void *arg) {
     }
 }
 
+void joystickPoll(void *pvParameters) {
+	bool is_going_front = 0;
+	bool is_going_left = 0;
+	bool is_going_right = 0;
+	bool is_going_back = 0;
+	int horizontal_value;
+	int vertical_value;
+
+	int deadzone_min = JOYSTICK_CENTER - THRESHOLD;
+	int deadzone_max = JOYSTICK_CENTER + THRESHOLD;
+
+	int horizontal_adjusted_deadzone_min;
+	int horizontal_adjusted_deadzone_max;
+	int vertical_adjusted_deadzone_min;
+	int vertical_adjusted_deadzone_max;
+
+	event_t ev;
+
+	while (1) {
+		horizontal_value = adc1_get_raw(JOYSTICK_HORIZONTAL);
+		vertical_value = adc1_get_raw(JOYSTICK_VERTICAL);
+
+		horizontal_adjusted_deadzone_min = is_going_left ? deadzone_min + TOLERANCE : deadzone_min;
+		horizontal_adjusted_deadzone_max = is_going_right ? deadzone_max - TOLERANCE : deadzone_max;
+		vertical_adjusted_deadzone_min = is_going_front ? deadzone_min + TOLERANCE : deadzone_min;
+		vertical_adjusted_deadzone_max = is_going_back ? deadzone_max - TOLERANCE : deadzone_max;
+
+		if (horizontal_value <= horizontal_adjusted_deadzone_max && horizontal_value >= horizontal_adjusted_deadzone_min) {
+			if (is_going_left) {
+				is_going_left = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_left;
+				D_PostEvent(&ev);
+			}
+			if (is_going_right) {
+				is_going_right = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_right;
+				D_PostEvent(&ev);
+			}
+		}
+		else if (horizontal_value < horizontal_adjusted_deadzone_min) {
+			if (!is_going_left) {
+				is_going_left = 1;
+				ev.type = ev_keydown;
+				ev.data1 = key_left;
+				D_PostEvent(&ev);
+			}
+			if (is_going_right) {
+				is_going_right = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_right;
+				D_PostEvent(&ev);
+			}
+		} else if (horizontal_value > horizontal_adjusted_deadzone_max) {
+			if (!is_going_right) {
+				is_going_right = 1;
+				ev.type = ev_keydown;
+				ev.data1 = key_right;
+				D_PostEvent(&ev);
+			}
+			if (is_going_left) {
+				is_going_left = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_left;
+				D_PostEvent(&ev);
+			}
+		}
+
+		if (vertical_value <= vertical_adjusted_deadzone_max && vertical_value >= vertical_adjusted_deadzone_min) {
+			if (is_going_front) {
+				is_going_front = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_up;
+				D_PostEvent(&ev);
+			}
+			if (is_going_back) {
+				is_going_back = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_down;
+				D_PostEvent(&ev);
+			}
+		}
+		else if (vertical_value < vertical_adjusted_deadzone_min) {
+			if (!is_going_front) {
+				is_going_front = 1;
+				ev.type = ev_keydown;
+				ev.data1 = key_up;
+				D_PostEvent(&ev);
+			}
+			if (is_going_back) {
+				is_going_back = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_down;
+				D_PostEvent(&ev);
+			}
+		} else if (vertical_value > vertical_adjusted_deadzone_max) {
+			if (!is_going_back) {
+				is_going_back = 1;
+				ev.type = ev_keydown;
+				ev.data1 = key_down;
+				D_PostEvent(&ev);
+			}
+			if (is_going_front) {
+				is_going_front = 0;
+				ev.type = ev_keyup;
+				ev.data1 = key_up;
+				D_PostEvent(&ev);
+			}
+		}
+
+		vTaskDelay(pdMS_TO_TICKS(50));
+	}
+}
+
 void gamepadInit(void)
 {
 	lprintf(LO_INFO, "gamepadInit: Initializing game pad.\n");
@@ -134,28 +257,36 @@ void jsInit()
     //interrupt of rising edge
     io_conf.intr_type = GPIO_INTR_ANYEDGE;
     //bit mask of the pins, use GPIO... here
-	for (int i=0; keymap[i].key!=NULL; i++)
-    	if(i==0)
+	for (int i=0; keymap[i].key!=NULL; i++) {
+    	if (i==0) {
 			io_conf.pin_bit_mask = (1ULL<<keymap[i].gpio);
-		else 
+		}
+		else {
 			io_conf.pin_bit_mask |= (1ULL<<keymap[i].gpio);
+		}
+	}
     //set as input mode    
     io_conf.mode = GPIO_MODE_INPUT;
     //enable pull-up mode
     io_conf.pull_up_en = 1;
     gpio_config(&io_conf);
 
+	adc1_config_width(ADC_WIDTH_BIT_12);
+	adc1_config_channel_atten(JOYSTICK_HORIZONTAL, ADC_ATTEN_DB_11);
+	adc1_config_channel_atten(JOYSTICK_VERTICAL, ADC_ATTEN_DB_11);
 
     //create a queue to handle gpio event from isr
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     //start gpio task
 	xTaskCreatePinnedToCore(&gpioTask, "GPIO", 4096, NULL, 7, NULL, 0);
+	xTaskCreate(joystickPoll, "PotMonitor", 2048, NULL, 2, NULL);
 
     //install gpio isr service
     gpio_install_isr_service(ESP_INTR_FLAG_SHARED);
     //hook isr handler for specific gpio pin
-	for (int i=0; keymap[i].key!=NULL; i++)
+	for (int i=0; keymap[i].key!=NULL; i++) {
     	gpio_isr_handler_add(keymap[i].gpio, gpio_isr_handler, (void*) keymap[i].gpio);
+	}
 
 	lprintf(LO_INFO, "jsInit: GPIO task created.\n");
 }
