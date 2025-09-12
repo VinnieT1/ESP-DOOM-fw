@@ -58,7 +58,6 @@ typedef struct {
 
 //Mappings from PS2 buttons to keys
 static const GPIOKeyMap keymap[]={
-	// {39, &key_up},
 	// {34, &key_down},
 	// {39, &key_left},
 	// {0, &key_up},
@@ -66,6 +65,7 @@ static const GPIOKeyMap keymap[]={
 	{32, &key_use},				//cross
 	{33, &key_fire},			//circle
 	{33, &key_menu_enter},
+	{39, &key_strafe},
 	{36, NULL},
 };
 /*	
@@ -97,6 +97,10 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
 }
 
+void toggle_strafing() {
+	is_strafing = !is_strafing;
+	lprintf(LO_INFO, "is %sstrafing\n", is_strafing ? "" : "not");
+}
 
 void gpioTask(void *arg) {
     uint32_t io_num;
@@ -105,18 +109,21 @@ void gpioTask(void *arg) {
     for(;;) {
 		lprintf(LO_INFO, "Waiting for GPIO event...\n");
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-			if (io_num == 39) {
-				is_strafing = !is_strafing;
-				lprintf(LO_INFO, "is%s strafing\n", is_strafing ? "" : " not");
-			}
 			for (int i=0; keymap[i].key!=NULL; i++) {
-				if(keymap[i].gpio == io_num) {
-					level = gpio_get_level(io_num);
-					lprintf(LO_INFO, "GPIO[%d] intr, val: %d\n", io_num, level);
-					ev.type=level ? ev_keyup : ev_keydown;
-					ev.data1=*keymap[i].key;
-					lprintf(LO_INFO, "Posting button event...\n");
-					D_PostEvent(&ev);
+				if (keymap[i].gpio == io_num) {
+					if (io_num == JOYSTICK_BUTTON) {
+						if (gpio_get_level(io_num) == 0) {
+							toggle_strafing();
+						}
+					}
+					else {
+						level = gpio_get_level(io_num);
+						lprintf(LO_INFO, "GPIO[%d] intr, val: %d\n", io_num, level);
+						ev.type=level ? ev_keyup : ev_keydown;
+						ev.data1=*keymap[i].key;
+						lprintf(LO_INFO, "Posting button event...\n");
+						D_PostEvent(&ev);
+					}
 				}
 			}
         }
@@ -243,11 +250,6 @@ void joystickPoll(void *pvParameters) {
 	}
 }
 
-void set_strafing(void *p) {
-	is_strafing = !is_strafing;
-	lprintf(LO_INFO, "is %sstrafing\n", is_strafing ? "" : "not");
-}
-
 void gamepadInit(void)
 {
 	lprintf(LO_INFO, "gamepadInit: Initializing game pad.\n");
@@ -295,9 +297,7 @@ void jsInit()
 	// gpio_isr_handler_add(39, set_strafing, NULL);
 
 	for (int i=0; keymap[i].key!=NULL; i++) {
-		if (keymap[i].gpio != 39) {
-			gpio_isr_handler_add(keymap[i].gpio, gpio_isr_handler, (void*) keymap[i].gpio);
-		}
+		gpio_isr_handler_add(keymap[i].gpio, gpio_isr_handler, (void*) keymap[i].gpio);
 	}
 
 	xTaskCreate(joystickPoll, "JoystickMonitor", 4096, NULL, 2, NULL);
